@@ -44,12 +44,6 @@ def clean_data(d):
 	I = pd.isnull(d['rtg_sp']) & ~pd.isnull(d['rtg_moody'])
 	d.loc[I,'rtg_sp'] = d.loc[I,('rtg_moody')].apply(f)
 
-#	print d.shape[0]
-#	#pick only entries with tradetype == Sale_to_Customer
-#	I = d['tradetype'] != "Sale_to_Customer"
-#	d = d.loc[I]
-#	print d.shape[0]
-
 	#drop rtg_moody
 	d = d.drop(['rtg_moody'], axis = 1)
 
@@ -76,55 +70,63 @@ def clean_data(d):
 
 	return d
 
-def transform_data(d):
+#def transform_data(d):
 
-	#drop cusip and name for now
-	#d = d.drop(['cusip','name','tradetype'], axis = 1)
-	d = d.drop(['cusip'], axis = 1)
+#	#drop cusip and name for now
+#	#d = d.drop(['cusip','name','tradetype'], axis = 1)
+#	d = d.drop(['cusip'], axis = 1)
 
-	#categorical variables are state, issuetype, issuesource
-	#use one hot binarization on state variable
-	le_state = preprocessing.LabelEncoder().fit(d.state) 
-	d.state = le_state.transform(d.state)
-	
-	le_issuetype = preprocessing.LabelEncoder().fit(d.issuetype)
-	d.issuetype = le_issuetype.transform(d.issuetype)	
+#	#categorical variables are state, issuetype, issuesource
+#	#use one hot binarization on state variable
+#	le_state = preprocessing.LabelEncoder().fit(d.state) 
+#	d.state = le_state.transform(d.state)
+#	
+#	le_issuetype = preprocessing.LabelEncoder().fit(d.issuetype)
+#	d.issuetype = le_issuetype.transform(d.issuetype)	
 
-	le_issuesource = preprocessing.LabelEncoder().fit(d.issuesource)
-	d.issuesource = le_issuesource.transform(d.issuesource)
+#	le_issuesource = preprocessing.LabelEncoder().fit(d.issuesource)
+#	d.issuesource = le_issuesource.transform(d.issuesource)
 
-	price = d.pop('price')
-	return d, price
+#	price = d.pop('price')
+#	return d, price
 
 def state_abbr_filter(s):
 	if s in state_abbr:
-		return True
-	
-	elif 
+		return ''
+
+	for code in state_abbr:
+		if " " + code + " " in s:
+			return ''.join(s.split(" " + code + " "))
+
+		if " " + code in s[-3:]:
+			return s[:-3]
+
+		if code + " " in s[:3]:
+			return s[3:]
+		
+	return s
 
 def build_name_features(d):
-	#assumes d is already cleaned
+	#assumes extract.clean_data(d) has already been performed
 
-	state_names = list(d.state.unique())
+	state_names = list(d.state.unique()) + ['massachusets']
 	state_names = [s.lower() for s in state_names].sort()
 
 	#remove state_names from string name if they do occur
+	#state names always seem to occur at beginning of name
 	def state_strip(s):
 		for state in state_names:
 			if state in s:
-				s = s.split(state)[-1]
-		return s.split()
+				s = ''.join(s.split(state))
+		return s.strip()
 
-	L = d.name.apply(state_strip)
-
-	#stop_words = [
-		
+	#apply state_name_strip and state_abbr_strip
 	#split words of each name into separate strings ('-', ' ', '/'), indexed by column
-	L = d.name.str.split(r'[\-/ ]', expand = True)
-
+	L = d.name.apply(state_strip).apply(state_abbr_filter).str.split(r'[\-/ ]', expand = True)
+		
 	#eliminate null/None values and concatenate columns into single column of words
 	S = pd.concat([L[j].dropna() for j in xrange(len(L.columns))], axis = 0)
-	S = S[S.apply(lambda x: len(x)) > 1] #filter out strings with only one character
+	S = S[S.apply(lambda x: len(x)) > 1] #drop strings with only one character
 
 	longer_name_features = S[S.apply(lambda x: len(x) > 4)].value_counts()[:250]
 	shorter_name_features = list(set(S.value_counts()[:50].index.tolist())-set(state_abbr))
@@ -139,29 +141,50 @@ def build_name_features(d):
 
 	return pd.concat([d, d_aug], axis = 1)
 	
+def build_state_features(d, num_states = None):
+	if num_states is not None:
+		assert num_states <= d.state.unique().size and num_states > 0
+		features = d.state.value_counts()[:num_states].index.tolist() + ['Other']
+		for j in xrange(len(features) - 1):
+			d_aug[j] = d.name.apply(lambda x: x == features[j]).astype(np.int)
+	
+	
+	else:
+		features = d.state.value_counts().index.tolist()
+
+	d_aug = pd.DataFrame(np.zeros((d.shape[0], len(features)), dtype = np.int), columns = features)
+	
+	for j in xrange(len(features)):
+		d_aug[j] = d.name.apply(lambda x: x == features[j]).astype(np.int)
+	
+	return pd.concat([d, d_aug], axis = 1)
+
+
+
+	
 
 	
 	
 	
 
-def count_unique_occurences(d):
-	"""
-	for state, issuetype, issuesource, name: show frequency of each category
-	"""
+#def count_unique_occurences(d):
+#	"""
+#	for state, issuetype, issuesource, name: show frequency of each category
+#	"""
 
-	print "state: "
-	print d.state.value_counts()
+#	print "state: "
+#	print d.state.value_counts()
 
-	print "issuetype: "
-	print d.issuetype.value_counts()
-	
-	print "issuesource: "
-	print d.issuesource.value_counts()
+#	print "issuetype: "
+#	print d.issuetype.value_counts()
+#	
+#	print "issuesource: "
+#	print d.issuesource.value_counts()
 
-	print "name: "
-	
+#	print "name: "
+#	
 
-	
+#	
 
 
 if __name__ == "__main__":
