@@ -13,8 +13,17 @@ state_abbr = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DC", "DE", "FL", "GA",
 	"SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"]
 state_abbr = [s.lower() for s in state_abbr]
 
+def get_data_simple(filename = None):
+	d = get_data(filename)
+	d = clean_data(d)
+
+	d_state = build_state_features(d, 15)
+	d_simple_text = build_other_text_features(d)
+	d = pd.concat([d.drop(['issuetype', 'issuesource', 'tradetype', 'name', 'state'], axis = 1), d_simple_text, d_state], axis = 1)
+	return d
+
 def get_data(filename = None):
-	usecols = ['Cusip', 'Yield', 'Name', 'State', 'IssueSize', 'IssueType', 'TradeType', 'IssueSource', 'Coupon', 'Maturity', 'RTG_Moody', 'RTG_SP', 'Price']
+	usecols = ['Yield', 'Name', 'State', 'IssueSize', 'IssueType', 'TradeType', 'IssueSource', 'Coupon', 'Maturity', 'RTG_Moody', 'RTG_SP', 'Price']
 	
 	#read data
 	if filename is None:
@@ -49,7 +58,8 @@ def clean_data(d):
 
 	#drop rows with missing values for existing data	
 	d = d.dropna()
-
+	d.index = range(d.shape[0]) #reset indices on rows to be consecutive after dropping NAs
+	
 	#convert rtg_sp values to numerical values based on standard ranking
 	sp_rating_dict = {'AAA':1, 'AA+':2, 'AA':3,
 		'AA-':4, 'A+':5, 'A':6, 'A-':7,
@@ -70,25 +80,8 @@ def clean_data(d):
 
 	return d
 
-#def transform_data(d):
-
-#	#drop cusip and name for now
-#	#d = d.drop(['cusip','name','tradetype'], axis = 1)
-#	d = d.drop(['cusip'], axis = 1)
-
-#	#categorical variables are state, issuetype, issuesource
-#	#use one hot binarization on state variable
-#	le_state = preprocessing.LabelEncoder().fit(d.state) 
-#	d.state = le_state.transform(d.state)
-#	
-#	le_issuetype = preprocessing.LabelEncoder().fit(d.issuetype)
-#	d.issuetype = le_issuetype.transform(d.issuetype)	
-
-#	le_issuesource = preprocessing.LabelEncoder().fit(d.issuesource)
-#	d.issuesource = le_issuesource.transform(d.issuesource)
-
-#	price = d.pop('price')
-#	return d, price
+def get_text_features(d):
+	pass
 
 def state_abbr_filter(s):
 	if s in state_abbr:
@@ -110,7 +103,8 @@ def build_name_features(d):
 	#assumes extract.clean_data(d) has already been performed
 
 	state_names = list(d.state.unique()) + ['massachusets']
-	state_names = [s.lower() for s in state_names].sort()
+	state_names = [s.lower() for s in state_names]
+	state_names.sort()
 
 	#remove state_names from string name if they do occur
 	#state names always seem to occur at beginning of name
@@ -128,64 +122,36 @@ def build_name_features(d):
 	S = pd.concat([L[j].dropna() for j in xrange(len(L.columns))], axis = 0)
 	S = S[S.apply(lambda x: len(x)) > 1] #drop strings with only one character
 
-	longer_name_features = S[S.apply(lambda x: len(x) > 4)].value_counts()[:250]
+	longer_name_features = S[S.apply(lambda x: len(x) > 4)].value_counts()[:250].index.tolist()
 	shorter_name_features = list(set(S.value_counts()[:50].index.tolist())-set(state_abbr))
 
 	combined_name_features = longer_name_features + shorter_name_features
 	
 	d_aug = pd.DataFrame(np.zeros((d.shape[0], len(combined_name_features)), dtype = np.int))
 	for j in xrange(len(combined_name_features)):
-		d_aug[j] = d.name.apply(lambda x: combines_name_features[j] in x).astype(np.int)
+		d_aug[j] = d.name.apply(lambda x: combined_name_features[j] in x).astype(np.int)
 	
-	pd.pop(d.name) #remove name column after adding augmented features
-
-	return pd.concat([d, d_aug], axis = 1)
+	return d_aug
 	
 def build_state_features(d, num_states = None):
-	if num_states is not None:
-		assert num_states <= d.state.unique().size and num_states > 0
-		features = d.state.value_counts()[:num_states].index.tolist() + ['Other']
-		for j in xrange(len(features) - 1):
-			d_aug[j] = d.name.apply(lambda x: x == features[j]).astype(np.int)
-	
-	
+	if num_states is None:
+		return pd.get_dummies(d.state)
 	else:
-		features = d.state.value_counts().index.tolist()
+		d_aug = pd.get_dummies(d.state)
+		assert num_states < d.state.unique().size and num_states > 0
+		features = d.state.value_counts()[:num_states].index.tolist() #pick out top num_states states from d.state Series
+		other_states = list(set(d.state.unique()) - set(features))
+		d_aug['otherstates'] = d_aug.loc[:,other_states].sum(axis = 1)
+		for state in other_states:
+			d_aug.pop(state)
 
-	d_aug = pd.DataFrame(np.zeros((d.shape[0], len(features)), dtype = np.int), columns = features)
-	
-	for j in xrange(len(features)):
-		d_aug[j] = d.name.apply(lambda x: x == features[j]).astype(np.int)
-	
-	return pd.concat([d, d_aug], axis = 1)
+		return d_aug
 
-
-
-	
-
-	
-	
-	
-
-#def count_unique_occurences(d):
-#	"""
-#	for state, issuetype, issuesource, name: show frequency of each category
-#	"""
-
-#	print "state: "
-#	print d.state.value_counts()
-
-#	print "issuetype: "
-#	print d.issuetype.value_counts()
-#	
-#	print "issuesource: "
-#	print d.issuesource.value_counts()
-
-#	print "name: "
-#	
-
-#	
-
+def build_other_text_features(d):
+	d_issuetype = pd.get_dummies(d.issuetype)
+	d_issuesource = pd.get_dummies(d.issuesource)
+	d_tradetype = d.tradetype.apply(lambda x: str(x) == 'Sale_to_Customer').astype(np.int)
+	return pd.concat([d_issuetype, d_issuesource, d_tradetype], axis = 1)
 
 if __name__ == "__main__":
 	main()
