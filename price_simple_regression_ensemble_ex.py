@@ -23,10 +23,12 @@ from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 def main():
 	d = extract.get_data_simple()
 	price = d.pop('price')
+	d = d.dropna()
 	column_names = d.columns
 
 	bins = np.array([ 0, 80, 90, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 112.5, 115, 120, 150])
 	price = np.digitize(price, bins)
+
 	#scale variables
 	d = StandardScaler().fit_transform(d)
 
