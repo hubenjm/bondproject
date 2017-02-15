@@ -13,31 +13,22 @@ state_abbr = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DC", "DE", "FL", "GA",
 	"SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"]
 state_abbr = [s.lower() for s in state_abbr]
 
-def get_data(filename = None):
-	#usecols = ['Cusip', 'Yield', 'Name', 'State', 'IssueSize', 'IssueType', 'TradeType', 'IssueSource', 'Coupon', 'Maturity', 'RTG_Moody', 'RTG_SP', 'Price', 'TradeID']
-	usecols = ['TradeId', 'Cusip', 'Amount', 'Price', 'Yield', 'TradeDate', 'TradeType', 'Name', 'State', 'RTG_Moody', 'RTG_SP', 'Coupon', 'Maturity',
-	'IssueSize', 'IssueType', 'IssueSource', 'BidCount']
-	#read data
-	if filename is None:
-		filename = "./data/TMC_020617.csv"
+#['TradeId', 'Cusip', 'Amount', 'Price', 'Yield', 'TradeDate', 'TradeType', 'Name', 'State', 'RTG_Moody', 'RTG_SP', 'Coupon', 'Maturity',
+#	'IssueSize', 'IssueType', 'IssueSource', 'BidCount']
 
-	d = pd.read_csv(filename, usecols = usecols)
+def get_data_simple(filename = None):
+	d = get_data(filename)
+	d = clean_data(d)
 
-	#make column names all lower case
-	d.columns = [x.lower() for x in d.columns]
-
+	d_state = build_state_features(d, 15)
+	d_simple_text = build_other_text_features(d)
+	d = pd.concat([d.drop(['issuetype', 'issuesource', 'tradetype', 'name', 'state', 'bidcount', 'cusip', 'tradeid'], axis = 1), d_simple_text, d_state], axis = 1)
 	return d
 
-def clean_data(d):
-	#remove entries with bad cusip
-	def cusip_filter(s):
-		if 'E+' in s:
-			return False
-		else:
-			return True
-
-	d.loc[:] = d.loc[d.cusip.apply(cusip_filter)]
-
+def compute_min_rtg(d):
+	"""
+	take minimum of rtg_moody and rtg_sp if both exist, take one if only one is provided, and leave as NA if neither exists
+	"""
 	#merge RTG_Moody and RTG_SP columns based on missing values
 	moody_to_sp_dict = {'Aaa':'AAA', 'Aa1':'AA+', 'Aa2':'AA',
 		'Aa3':'AA-', 'A1':'A+', 'A2':'A', 'A3':'A-',
@@ -82,7 +73,7 @@ def clean_data(d):
 	g_sp = lambda x: sp_rating_dict[x]
 	d.loc[:, 'rtg_sp'] = d['rtg_sp'].apply(g_sp)
 
-#	#convert rtg_moody values to numerical values based on standard ranking
+	#convert rtg_moody values to numerical values based on standard ranking
 	moody_rating_dict = {'Aaa':1, 'Aa1':2, 'Aa2':3,
 		'Aa3':4, 'A1':5, 'A2':6, 'A3':7,
 		'Baa1':8, 'Baa2':9, 'Baa3':10,
@@ -94,10 +85,40 @@ def clean_data(d):
 	d.loc[:,'rtg_moody'] = d['rtg_moody'].apply(g_moody)
 
 	#compute minimum of RTG_SP and RTG_MOODY
-	d['rtg'] = d[["rtg_moody", "rtg_sp"]].min(axis=1)
+	temp = d[["rtg_moody", "rtg_sp"]].min(axis=1)
+	d['rtg'] = temp
 
 	#drop rtg_moody
 	d = d.drop(['rtg_moody', 'rtg_sp'], axis = 1)
+
+	return d
+	
+def get_data(filename = None):
+	usecols = ['TradeId', 'Cusip', 'Amount', 'Price', 'Yield', 'TradeDate', 'TradeType', 'Name', 'State', 'RTG_Moody', 'RTG_SP', 'Coupon', 'Maturity',
+	'IssueSize', 'IssueType', 'IssueSource', 'BidCount']
+
+	#read data
+	if filename is None:
+		filename = "./data/TMC_020617.csv"
+
+	d = pd.read_csv(filename, usecols = usecols)
+
+	#make column names all lower case
+	d.columns = [x.lower() for x in d.columns]
+
+	return d
+
+def clean_data(d):
+	#remove entries with bad cusip
+	def cusip_filter(s):
+		if 'E+' in s:
+			return False
+		else:
+			return True
+
+	d.loc[:] = d.loc[d.cusip.apply(cusip_filter)]
+
+	d = compute_min_rtg(d)
 
 	#drop entries with negative yield
  	d = d[d['yield'] >= 0]
@@ -117,26 +138,6 @@ def clean_data(d):
 	d.index = range(d.shape[0])
 
 	return d
-
-#def transform_data(d):
-
-#	#drop cusip and name for now
-#	#d = d.drop(['cusip','name','tradetype'], axis = 1)
-#	d = d.drop(['cusip'], axis = 1)
-
-#	#categorical variables are state, issuetype, issuesource
-#	#use one hot binarization on state variable
-#	le_state = preprocessing.LabelEncoder().fit(d.state) 
-#	d.state = le_state.transform(d.state)
-#	
-#	le_issuetype = preprocessing.LabelEncoder().fit(d.issuetype)
-#	d.issuetype = le_issuetype.transform(d.issuetype)	
-
-#	le_issuesource = preprocessing.LabelEncoder().fit(d.issuesource)
-#	d.issuesource = le_issuesource.transform(d.issuesource)
-
-#	price = d.pop('price')
-#	return d, price
 
 def state_abbr_filter(s):
 	if s in state_abbr:
@@ -158,7 +159,8 @@ def build_name_features(d):
 	#assumes extract.clean_data(d) has already been performed
 
 	state_names = list(d.state.unique()) + ['massachusets']
-	state_names = [s.lower() for s in state_names].sort()
+	state_names = [s.lower() for s in state_names]
+	state_names.sort()
 
 	#remove state_names from string name if they do occur
 	#state names always seem to occur at beginning of name
@@ -176,36 +178,36 @@ def build_name_features(d):
 	S = pd.concat([L[j].dropna() for j in xrange(len(L.columns))], axis = 0)
 	S = S[S.apply(lambda x: len(x)) > 1] #drop strings with only one character
 
-	longer_name_features = S[S.apply(lambda x: len(x) > 4)].value_counts()[:250]
+	longer_name_features = S[S.apply(lambda x: len(x) > 4)].value_counts()[:250].index.tolist()
 	shorter_name_features = list(set(S.value_counts()[:50].index.tolist())-set(state_abbr))
 
 	combined_name_features = longer_name_features + shorter_name_features
 	
 	d_aug = pd.DataFrame(np.zeros((d.shape[0], len(combined_name_features)), dtype = np.int))
 	for j in xrange(len(combined_name_features)):
-		d_aug[j] = d.name.apply(lambda x: combines_name_features[j] in x).astype(np.int)
+		d_aug[j] = d.name.apply(lambda x: combined_name_features[j] in x).astype(np.int)
 	
-	pd.pop(d.name) #remove name column after adding augmented features
-
-	return pd.concat([d, d_aug], axis = 1)
+	return d_aug
 	
 def build_state_features(d, num_states = None):
-	if num_states is not None:
-		assert num_states <= d.state.unique().size and num_states > 0
-		features = d.state.value_counts()[:num_states].index.tolist() + ['Other']
-		for j in xrange(len(features) - 1):
-			d_aug[j] = d.name.apply(lambda x: x == features[j]).astype(np.int)
-	
+	if num_states is None:
+		return pd.get_dummies(d.state)
 	else:
-		features = d.state.value_counts().index.tolist()
+		d_aug = pd.get_dummies(d.state)
+		assert num_states < d.state.unique().size and num_states > 0
+		features = d.state.value_counts()[:num_states].index.tolist() #pick out top num_states states from d.state Series
+		other_states = list(set(d.state.unique()) - set(features))
+		d_aug['otherstates'] = d_aug.loc[:,other_states].sum(axis = 1)
+		for state in other_states:
+			d_aug.pop(state)
 
-	d_aug = pd.DataFrame(np.zeros((d.shape[0], len(features)), dtype = np.int), columns = features)
-	
-	for j in xrange(len(features)):
-		d_aug[j] = d.name.apply(lambda x: x == features[j]).astype(np.int)
-	
-	return pd.concat([d, d_aug], axis = 1)
+		return d_aug
 
+def build_other_text_features(d):
+	d_issuetype = pd.get_dummies(d.issuetype)
+	d_issuesource = pd.get_dummies(d.issuesource)
+	d_tradetype = d.tradetype.apply(lambda x: str(x) == 'Sale_to_Customer').astype(np.int)
+	return pd.concat([d_issuetype, d_issuesource, d_tradetype], axis = 1)
 
 def compile_price_change_data(d):
 	unique_cusip = list(d.cusip.unique())
@@ -216,7 +218,7 @@ def compile_price_change_data(d):
 
 	for i, s in enumerate(unique_cusip):
 		#get all data points for given cusip
-		d_slice = d.loc[d.cusip == s].sort(columns = ['dtradedate', 'tradeid'], ascending = [1,1])
+		d_slice = d.loc[d.cusip == s].sort(columns = ['tradedate', 'tradeid'], ascending = [1,1])
 		d_purchase = d_slice[d_slice.tradetype == 'Sale_to_Customer']	
 		d_sell = d_slice[d_slice.tradetype == 'Purchase_from_Customer']
 	
@@ -236,7 +238,6 @@ def compile_price_change_data(d):
 					holdtime_data += list(holdtime)
 
 		print("extract.compile_price_change_data: finished cusip {} of {}".format(i, len(unique_cusip)))
-
 		
 	#create data frame that includes all dprice and holdtime data, set its index to dindex_set and perform inner join with d
 	t = pd.DataFrame(np.vstack((dprice_data, holdtime_data)).T, columns = ['dprice', 'holdtime'])
@@ -244,8 +245,6 @@ def compile_price_change_data(d):
 	
 	joined_data = pd.concat([d, t], axis=1, join='inner')
 	return joined_data
-
-		
 
 if __name__ == "__main__":
 	main()
