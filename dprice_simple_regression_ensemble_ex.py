@@ -5,7 +5,6 @@ import itertools
 import extract
 import visualize
 from sklearn import tree
-import pydotplus 
 
 from sklearn.preprocessing import StandardScaler
 from sklearn import preprocessing
@@ -24,39 +23,28 @@ from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 
 def main():
 	#d = extract.get_data_simple()
-	s0 = pd.read_csv("price_change_data.csv", usecols = ['yield', 'tradetype',
+	s0 = pd.read_csv("price_change_data.csv", usecols = ['d_index', 'yield', 'tradetype',
 		'state', 'coupon', 'maturity', 'issuetype', 'issuesource', 'rtg',
-		'dtradedate', 'dprice', 'holdtime'])
+		'tradedate', 'dprice', 'holdtime'])
 
-	#index = s0.pop(0)
+	d_index = s0.pop('d_index')
 
 	#transform text features
 	#s_name_features = extract.build_name_features(s0)
 	s_state_features = extract.build_state_features(s0, num_states = 15)
 	s_other_features = extract.build_other_text_features(s0)
-	s = pd.concat([s0.drop(['state', 'issuetype', 'issuesource', 'tradetype'], axis = 1), s_state_features, s_other_features], axis = 1)
+	s = pd.concat([s0.drop(['yield', 'state', 'issuetype', 'issuesource', 'tradetype'], axis = 1), s_state_features, s_other_features], axis = 1)
 	s = s.dropna()
-	s = s[s.holdtime < 6]
+	s = s[s.holdtime < 7]
 	
 	dprice = s.pop('dprice')
 	dprice_binary = dprice.apply(lambda x: x > 0).astype(np.int)
-
-	print s.columns.tolist(), len(s.columns.tolist())
 
 	#scale variables
 	#s = StandardScaler().fit_transform(s)
 
 	#split into test and training parts
-	s_train, s_test, dp_train, dp_test = train_test_split(s, dprice_binary, test_size=0.20, random_state=13)
-
-#	I = s_test.holdtime <= 5
-#	s_test = s_test[I]
-#	dp_test = dp_test[I]
-
-	#visualize some characteristics of the bonds which lead to positive gains
-	#print s0[dprice > 0].state.value_counts()
-
-
+	s_train, s_test, dp_train, dp_test = train_test_split(s, dprice_binary, test_size=0.20, random_state=23)
 
 #	names = ["Nearest Neighbors", "Linear SVM", "RBF SVM",
 #		 "Decision Tree", "Random Forest", "Neural Net", "AdaBoost",
@@ -79,10 +67,6 @@ def main():
 
 	for name, clf in zip(names, classifiers):
 		clf = clf.fit(s_train, dp_train)
-		if name == "Decision Tree":
-			with open("iris.dot", 'w') as f:
-				f = tree.export_graphviz(clf, out_file=f)
-
 		dp_pred = clf.predict(s_test)
         	score = clf.score(s_test, dp_test)
 		print(name + ": number correct predictions/total samples = {}".format(score))

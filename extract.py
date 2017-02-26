@@ -85,11 +85,11 @@ def compute_min_rtg(d):
 	d.loc[:,'rtg_moody'] = d['rtg_moody'].apply(g_moody)
 
 	#compute minimum of RTG_SP and RTG_MOODY
-	temp = d[["rtg_moody", "rtg_sp"]].min(axis=1)
-	d['rtg'] = temp
+	d.loc[:,'rtg'] = d[["rtg_moody", "rtg_sp"]].max(axis=1)
 
 	#drop rtg_moody
-	d = d.drop(['rtg_moody', 'rtg_sp'], axis = 1)
+	d.pop('rtg_moody')
+	d.pop('rtg_sp')
 
 	return d
 	
@@ -129,9 +129,9 @@ def clean_data(d):
 	d['maturity'] = (d['maturity'] - min_maturity_date)/np.timedelta64(1,'D')
 		
 	#add column for time since minimum trade date
-	d['dtradedate'] = pd.to_datetime(d['tradedate'])
-	min_tradedate = d['dtradedate'].min()
-	d['dtradedate'] = (d['dtradedate'] - min_tradedate)/np.timedelta64(1, 'D')
+	d['tradedate'] = pd.to_datetime(d['tradedate'])
+	min_tradedate = d['tradedate'].min()
+	d['tradedate'] = (d['tradedate'] - min_tradedate)/np.timedelta64(1, 'D')
 
 	#make names all lower case
 	d.name = d.name.apply(lambda x: x.lower())
@@ -218,7 +218,7 @@ def compile_price_change_data(d):
 
 	for i, s in enumerate(unique_cusip):
 		#get all data points for given cusip
-		d_slice = d.loc[d.cusip == s].sort(columns = ['tradedate', 'tradeid'], ascending = [1,1])
+		d_slice = d.loc[d.cusip == s].sort_values(by = ['tradedate', 'tradeid'], ascending = [True, True])
 		d_purchase = d_slice[d_slice.tradetype == 'Sale_to_Customer']	
 		d_sell = d_slice[d_slice.tradetype == 'Purchase_from_Customer']
 	
@@ -229,11 +229,11 @@ def compile_price_change_data(d):
 			#go through d_purchase sequentially and slice from d_sell for dtradedate values greater than current dtradedate
 			for j in d_purchase.index:
 				d_entry = d_purchase.loc[j,:]
-				dp = d_sell.loc[d_sell.dtradedate > d_entry.dtradedate].price.values
+				dp = d_sell.loc[d_sell.tradedate > d_entry.tradedate].price.values
 				if dp.shape[0] > 0:
 					dp -= d_entry.price
 					dindex_set += dp.shape[0]*[j] #add row j of d, dp.shape[0] times
-					holdtime = d_sell.loc[d_sell.dtradedate > d_entry.dtradedate].dtradedate - d_entry.dtradedate
+					holdtime = d_sell.loc[d_sell.tradedate > d_entry.tradedate].tradedate - d_entry.tradedate
 					dprice_data += list(dp)
 					holdtime_data += list(holdtime)
 
@@ -242,8 +242,10 @@ def compile_price_change_data(d):
 	#create data frame that includes all dprice and holdtime data, set its index to dindex_set and perform inner join with d
 	t = pd.DataFrame(np.vstack((dprice_data, holdtime_data)).T, columns = ['dprice', 'holdtime'])
 	t.index = dindex_set
-	
+
 	joined_data = pd.concat([d, t], axis=1, join='inner')
+	joined_data['d_index'] = joined_data.index.values
+	joined_data.index = range(joined_data.shape[0])
 	return joined_data
 
 if __name__ == "__main__":
