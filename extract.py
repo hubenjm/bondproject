@@ -200,8 +200,8 @@ def build_name_features(d, num_general_words = 50, num_long_words = 250, long_wo
 	combined_name_features = longer_name_features + shorter_name_features
 	
 	d_aug = pd.DataFrame(np.zeros((d.shape[0], len(combined_name_features)), dtype = np.int))
-	for j in xrange(len(combined_name_features)):
-		d_aug[j] = d.name.apply(lambda x: combined_name_features[j] in x).astype(np.int)
+	for word in set(combined_name_features):
+		d_aug[word] = d.name.apply(lambda x: word in x).astype(np.int)
 	
 	return d_aug
 	
@@ -242,6 +242,7 @@ def compile_price_change_data(d, fixed_tradetype = None, tradetype_dict = {'purc
 	unique_cusip = list(d.cusip.unique())
 	dindex_set_1 = [] #d_index for first trade event
 	dindex_set_2 = [] #d_index for second trade event
+	tradedate_2 = []
 
 	dprice_data = []
 	holdtime_data = [] #keeps track of dprice and holdtime for each price change event
@@ -277,6 +278,8 @@ def compile_price_change_data(d, fixed_tradetype = None, tradetype_dict = {'purc
 						holdtime = d_slice.loc[J].tradedate - d_entry.tradedate
 						dprice_data += list(dp)
 						holdtime_data += list(holdtime)
+						
+						tradedate_2 += list(d_slice.loc[J].tradedate.values)
 
 		else: #assume we want to collect buy->sell pairs
 			#'Sale_to_Customer': 1, 'Purchase_from_Customer': 0
@@ -299,11 +302,14 @@ def compile_price_change_data(d, fixed_tradetype = None, tradetype_dict = {'purc
 						holdtime = d_sell.loc[J].tradedate - d_entry.tradedate
 						dprice_data += list(dp)
 						holdtime_data += list(holdtime)
+
+						tradedate_2 += list(d_sell.loc[J].tradedate.values)
 		
 	#create data frame that includes all dprice and holdtime data, set its index to dindex_set and perform inner join with d
 	t = pd.DataFrame(np.vstack((dprice_data, holdtime_data)).T, columns = ['dprice', 'holdtime'])
 	t.loc[:, 'd_index_1'] = dindex_set_1
 	t.loc[:, 'd_index_2'] = dindex_set_2
+	t.loc[:, 'tradedate_2'] = tradedate_2
 
 	d_filter.loc[:,'d_index_1'] = d_filter.index
 
