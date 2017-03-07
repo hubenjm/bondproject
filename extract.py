@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import itertools
+from tqdm import tqdm
 
 from sklearn.preprocessing import StandardScaler
 from sklearn import preprocessing
@@ -93,14 +94,14 @@ def compute_min_rtg(d):
 
 	return d
 	
-def get_data(filename = None):
-	usecols = ['TradeId', 'Cusip', 'Amount', 'Price', 'Yield', 'TradeDate', 'TradeType', 'Name', 'State', 'RTG_Moody', 'RTG_SP', 'Coupon', 'Maturity',
-	'IssueSize', 'IssueType', 'IssueSource', 'BidCount']
+def get_data(filename = "./data/TMC_020617.csv", usecols = 'default'):
+
+	if usecols == 'default':
+		usecols = ['TradeId', 'Cusip', 'Amount', 'Price', 'Yield', 'TradeDate', 'TradeType', 'Name', 'State', 'RTG_Moody', 'RTG_SP', 'Coupon', 'Maturity', 'IssueSize', 'IssueType', 'IssueSource', 'BidCount']
+	elif usecols == 'alt':
+		usecols = ['cusip', 'price', 'yield', 'amount', 'tradedate', 'tradetype', 'name', 'state', 'RTG_Moody', 'RTG_SP', 'coupon', 'maturity', 'issuetype', 'issuesource']
 
 	#read data
-	if filename is None:
-		filename = "./data/TMC_020617.csv"
-
 	d = pd.read_csv(filename, usecols = usecols)
 
 	#make column names all lower case
@@ -108,7 +109,8 @@ def get_data(filename = None):
 
 	return d
 
-def clean_data(d):
+def clean_data(d, reference_date = '01/01/2017'):
+	date_i = pd.to_datetime(reference_date)
 	#remove entries with bad cusip
 	def cusip_filter(s):
 		if 'E+' in s:
@@ -123,19 +125,33 @@ def clean_data(d):
 	#drop entries with negative yield
  	d = d[d['yield'] >= 0]
 	
-	#adjust maturity date data to be days past minimum date in data set
-	d['maturity'] = pd.to_datetime(d['maturity'])
-	min_maturity_date = d['maturity'].min()
-	d['maturity'] = (d['maturity'] - min_maturity_date)/np.timedelta64(1,'D')
-		
 	#add column for time since minimum trade date
 	d['tradedate'] = pd.to_datetime(d['tradedate'])
-	min_tradedate = d['tradedate'].min()
-	d['tradedate'] = (d['tradedate'] - min_tradedate)/np.timedelta64(1, 'D')
+	d['maturity'] = pd.to_datetime(d['maturity'])
+
+	d['maturity'] = (d['maturity'] - d['tradedate'])/np.timedelta64(1,'D')
+	d['tradedate'] = (d['tradedate'] - date_i)/np.timedelta64(1, 'D')
+
+	#clean up trade type
+	def tradetype_filter(s):
+		if s.lower() == 'customer sold':
+			return "Purchase_from_Customer"
+		elif s.lower() == 'customer bought':
+			return "Sale_to_Customer"
+		else:
+			return s
+		
+	d.tradetype = d.tradetype.apply(tradetype_filter)
 
 	#make names all lower case
 	d.name = d.name.apply(lambda x: x.lower())
 	d.index = range(d.shape[0])
+
+	#add prefix to Issue Source and Issue Type to eliminate potential collisions
+	if 'issuesource' in d.columns:
+		d.issuesource = d.issuesource.apply(lambda x: "ISSUE SOURCE: " + str(x))
+	if 'issuetype' in d.columns:
+		d.issuetype = d.issuetype.apply(lambda x: "ISSUE TYPE: " + str(x))
 
 	return d
 
@@ -155,7 +171,7 @@ def state_abbr_filter(s):
 		
 	return s
 
-def build_name_features(d):
+def build_name_features(d, num_general_words = 50, num_long_words = 250, long_word_length = 5):
 	#assumes extract.clean_data(d) has already been performed
 
 	state_names = list(d.state.unique()) + ['massachusets']
@@ -178,8 +194,8 @@ def build_name_features(d):
 	S = pd.concat([L[j].dropna() for j in xrange(len(L.columns))], axis = 0)
 	S = S[S.apply(lambda x: len(x)) > 1] #drop strings with only one character
 
-	longer_name_features = S[S.apply(lambda x: len(x) > 4)].value_counts()[:250].index.tolist()
-	shorter_name_features = list(set(S.value_counts()[:50].index.tolist())-set(state_abbr))
+	longer_name_features = S[S.apply(lambda x: len(x) >= long_word_length)].value_counts()[:num_long_words].index.tolist()
+	shorter_name_features = list(set(S.value_counts()[:num_general_words].index.tolist())-set(state_abbr))
 
 	combined_name_features = longer_name_features + shorter_name_features
 	
@@ -203,49 +219,97 @@ def build_state_features(d, num_states = None):
 
 		return d_aug
 
-def build_other_text_features(d):
-	d_issuetype = pd.get_dummies(d.issuetype)
-	d_issuesource = pd.get_dummies(d.issuesource)
-	d_tradetype = d.tradetype.apply(lambda x: str(x) == 'Sale_to_Customer').astype(np.int)
-	return pd.concat([d_issuetype, d_issuesource, d_tradetype], axis = 1)
+def build_other_text_features(d, features = ['issuetype', 'issuesource'], tradetype = True):
+	d_other = {}
+	for j in range(len(features)):
+		d_other[features[j]] = pd.get_dummies(d[features[j]])
+#	d_issuetype = pd.get_dummies(d.issuetype)
+#	d_issuesource = pd.get_dummies(d.issuesource)
 
-def compile_price_change_data(d):
+	if tradetype:
+		d_tradetype = d.tradetype.apply(lambda x: str(x) == 'Sale_to_Customer').astype(np.int)
+		return pd.concat([d_other[j] for j in d_other] + [d_tradetype], axis = 1)
+	else:
+		return pd.concat([d_other[j] for j in d_other], axis = 1)
+
+def compile_price_change_data(d, fixed_tradetype = None, tradetype_dict = {'purchase': 'Sale_to_Customer', 'sell': 'Purchase_from_Customer'}, marketvalue_min = 0.0, rtg_limit = 22):
+	"""
+	marketvalue_min, specifies minimum marketvalue amount to consider for trade filters (e.g. 20000)
+	"""
+	assert fixed_tradetype in ['purchase', 'sell'] or fixed_tradetype is None
+
+	#tradetype_dict = {'purchase': 1, 'sell': 0}
 	unique_cusip = list(d.cusip.unique())
-	dindex_set = [] #for keeping track of which entry of original data set d to parse from when filling in price change table
-					#each row of price change set will correspond to a specific bond at a specific tradedate and a specific dtradedate
+	dindex_set_1 = [] #d_index for first trade event
+	dindex_set_2 = [] #d_index for second trade event
+
 	dprice_data = []
 	holdtime_data = [] #keeps track of dprice and holdtime for each price change event
 
-	for i, s in enumerate(unique_cusip):
-		#get all data points for given cusip
-		d_slice = d.loc[d.cusip == s].sort_values(by = ['tradedate', 'tradeid'], ascending = [True, True])
-		d_purchase = d_slice[d_slice.tradetype == 'Sale_to_Customer']	
-		d_sell = d_slice[d_slice.tradetype == 'Purchase_from_Customer']
-	
-		if d_sell.size == 0 or d_purchase.size == 0:
-			continue #no data points to compare for price changes
-		
-		else:
-			#go through d_purchase sequentially and slice from d_sell for dtradedate values greater than current dtradedate
-			for j in d_purchase.index:
-				d_entry = d_purchase.loc[j,:]
-				dp = d_sell.loc[d_sell.tradedate > d_entry.tradedate].price.values
-				if dp.shape[0] > 0:
-					dp -= d_entry.price
-					dindex_set += dp.shape[0]*[j] #add row j of d, dp.shape[0] times
-					holdtime = d_sell.loc[d_sell.tradedate > d_entry.tradedate].tradedate - d_entry.tradedate
-					dprice_data += list(dp)
-					holdtime_data += list(holdtime)
+	#filter out all bonds with less than marketvalue_min before proceeding
+	if 'amount' in d.columns:
+		d_filter = d.loc[d.amount*d.price/100.0 >= marketvalue_min, :]
+	else:
+		d_filter = d
 
-		print("extract.compile_price_change_data: finished cusip {} of {}".format(i, len(unique_cusip)))
+	for s in tqdm(unique_cusip):
+		#get all data points for given cusip
+		I = (d_filter.cusip == s) & (d_filter.rtg <= rtg_limit)
+		
+		if 'tradeid' in d.columns:
+			d_slice = d_filter.loc[I].sort_values(by = ['tradedate', 'tradeid'], ascending = [True, True])
+		else:
+			d_slice = d_filter.loc[I].sort_values(by = ['tradedate'], ascending = [True])
+
+		if fixed_tradetype is not None:
+			d_slice = d_slice.loc[d_slice.tradetype == tradetype_dict[fixed_tradetype], :]
+			if d_slice.size == 0:
+				continue
+			else:
+				for j in d_slice.index:
+					d_entry = d_slice.loc[j,:]
+					J = d_slice.tradedate > d_entry.tradedate
+					dp = d_slice.loc[J].price.values
+					if dp.shape[0] > 0:
+						dp -= d_entry.price
+						dindex_set_1 += dp.shape[0]*[j] #add row j of d, dp.shape[0] times
+						dindex_set_2 += list(d_slice[J].index.values)
+						holdtime = d_slice.loc[J].tradedate - d_entry.tradedate
+						dprice_data += list(dp)
+						holdtime_data += list(holdtime)
+
+		else: #assume we want to collect buy->sell pairs
+			#'Sale_to_Customer': 1, 'Purchase_from_Customer': 0
+			d_purchase = d_slice[d_slice.tradetype == tradetype_dict['purchase']]
+			d_sell = d_slice[d_slice.tradetype == tradetype_dict['sell']]
+		
+			if d_sell.size == 0 or d_purchase.size == 0:
+				continue #no data points to compare for price changes
+		
+			else:
+				#go through d_purchase sequentially and slice from d_sell for dtradedate values greater than current dtradedate
+				for j in d_purchase.index:
+					d_entry = d_purchase.loc[j,:]
+					J = d_sell.tradedate > d_entry.tradedate
+					dp = d_sell.loc[J].price.values
+					if dp.shape[0] > 0:
+						dp -= d_entry.price
+						dindex_set_1 += dp.shape[0]*[j] #add row j of d, dp.shape[0] times
+						dindex_set_2 += d_sell[J].index.values
+						holdtime = d_sell.loc[J].tradedate - d_entry.tradedate
+						dprice_data += list(dp)
+						holdtime_data += list(holdtime)
 		
 	#create data frame that includes all dprice and holdtime data, set its index to dindex_set and perform inner join with d
 	t = pd.DataFrame(np.vstack((dprice_data, holdtime_data)).T, columns = ['dprice', 'holdtime'])
-	t.index = dindex_set
+	t.loc[:, 'd_index_1'] = dindex_set_1
+	t.loc[:, 'd_index_2'] = dindex_set_2
 
-	joined_data = pd.concat([d, t], axis=1, join='inner')
-	joined_data['d_index'] = joined_data.index.values
-	joined_data.index = range(joined_data.shape[0])
+	d_filter.loc[:,'d_index_1'] = d_filter.index
+
+	#joined_data = pd.concat([d_filter, t], axis=1, join='inner')
+#	joined_data['d_index_1'] = joined_data.index.values
+	joined_data = t.merge(d_filter, how='left', on='d_index_1')
 	return joined_data
 
 if __name__ == "__main__":
